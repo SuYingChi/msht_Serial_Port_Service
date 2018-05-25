@@ -1,0 +1,28 @@
+package com.mcloyal.serialport.utils;
+
+/**
+ * Created by Administrator on 2018/3/13 0013.
+ */
+
+public class StringUtils {
+    /**
+     * 截取信号值
+     *
+     * @param context
+     * @return
+     */
+    public static int getcqs(String context) {
+        int cqs = -1;
+        if (context.length() <= 29) {
+            return cqs;
+        }
+        String str = context.substring(27, 29);
+        try {
+            cqs = Integer.parseInt(str);
+        } catch (Exception e) {
+
+        }
+        return cqs;
+    }
+
+}

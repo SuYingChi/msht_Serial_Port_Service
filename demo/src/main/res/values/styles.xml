@@ -1,0 +1,62 @@
+<resources>
+    <!-- Base application theme. -->
+    <style name="AppTheme" parent="AppBaseTheme">
+        <!-- Customize your theme here. -->
+        <item name="colorPrimary">@color/app_base_color</item>
+        <item name="colorPrimaryDark">@color/app_base_color</item>
+        <item name="colorAccent">@color/colorAccent</item>
+        <item name="android:windowAnimationStyle">@style/activityAnimation</item>
+    </style>
+    <!--Theme.AppCompat.Light.DarkActionBar-->
+    <style name="AppBaseTheme" parent="Theme.AppCompat.Light.NoActionBar">
+        <!-- Customize your theme here. -->
+        <item name="android:fitsSystemWindows">true</item>
+        <item name="windowActionBar">false</item>
+        <item name="windowNoTitle">true</item>
+        <item name="android:textColorPrimary">@android:color/black</item>
+        <item name="android:windowBackground">@color/window_background</item>
+        <item name="popupTheme">@style/popupTheme</item>
+        <item name="popupMenuStyle">@style/popupMenuStyle</item>
+        <item name="android:activatedBackgroundIndicator">@drawable/activated_background</item>
+        <item name="selectableItemBackground">@drawable/selectable_background</item>
+    </style>
+
+    <style name="popupTheme" parent="AppBaseTheme.Light">
+        <item name="android:textColor">@android:color/black</item>
+    </style>
+
+    <style name="AppBaseTheme.Light" parent="Theme.AppCompat.Light.DarkActionBar">
+        <item name="android:fitsSystemWindows">true</item>
+        <item name="windowActionBar">false</item>
+        <item name="windowNoTitle">true</item>
+        <item name="android:textColorPrimary">@android:color/black</item>
+        <item name="android:windowBackground">@color/window_background</item>
+        <item name="popupTheme">@style/popupTheme</item>
+        <item name="popupMenuStyle">@style/popupMenuStyle</item>
+        <item name="android:activatedBackgroundIndicator">@drawable/activated_background</item>
+        <item name="selectableItemBackground">@drawable/selectable_background</item>
+    </style>
+
+    <style name="popupMenuStyle" parent="Base.Widget.AppCompat.PopupMenu.Overflow"></style>
+
+
+    <style name="activityAnimation" parent="@android:style/Animation">
+        <item name="android:activityOpenEnterAnimation">@anim/slide_right_in</item>
+        <item name="android:activityOpenExitAnimation">@anim/slide_left_out</item>
+        <item name="android:activityCloseEnterAnimation">@anim/slide_left_in</item>
+        <item name="android:activityCloseExitAnimation">@anim/slide_right_out</item>
+    </style>
+
+
+    <style name="loading_dialog" parent="@android:style/Theme.Dialog">
+        <item name="android:windowBackground">@color/transparent</item>
+        <item name="android:windowFrame">@null</item>
+        <item name="android:windowNoTitle">true</item>
+        <item name="android:windowIsFloating">true</item>
+        <item name="android:windowFullscreen">true</item>
+        <item name="android:windowIsTranslucent">false</item>
+        <item name="android:windowContentOverlay">@null</item>
+        <item name="android:background">@null</item>
+        <item name="android:backgroundDimEnabled">true</item>
+    </style>
+</resources>

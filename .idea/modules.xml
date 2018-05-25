@@ -1,0 +1,11 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<project version="4">
+  <component name="ProjectModuleManager">
+    <modules>
+      <module fileurl="file://$PROJECT_DIR$/SerialPort.iml" filepath="$PROJECT_DIR$/SerialPort.iml" />
+      <module fileurl="file://$PROJECT_DIR$/SerialportLibs/SerialportLibs.iml" filepath="$PROJECT_DIR$/SerialportLibs/SerialportLibs.iml" />
+      <module fileurl="file://$PROJECT_DIR$/demo/demo.iml" filepath="$PROJECT_DIR$/demo/demo.iml" />
+      <module fileurl="file://$PROJECT_DIR$/wsapp/wsapp.iml" filepath="$PROJECT_DIR$/wsapp/wsapp.iml" />
+    </modules>
+  </component>
+</project>

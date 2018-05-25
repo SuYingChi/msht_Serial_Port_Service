@@ -1,0 +1,52 @@
+package com.mcloyal.demo;
+
+import android.content.Intent;
+import android.content.IntentFilter;
+
+import com.mcloyal.demo.receiver.PortReceiver;
+import com.mcloyal.serialport.AppLibsContext;
+import com.mcloyal.serialport.utils.SpecialUtils;
+
+import java.util.ArrayList;
+
+/**
+ * Created by rain on 2017/11/6.
+ */
+public class AppContext extends AppLibsContext {
+    @Override
+    public void onCreate() {
+        super.onCreate();
+        ArrayList<byte[]> types = new ArrayList<>();
+        types.add(new byte[]{0x01, 0x04});
+        SpecialUtils.addTypes(types);
+        initPortBroadcast();
+    }
+
+    /**
+     * 初始化广播事件以及后台服务事件监听串口接收程序
+     */
+    public void initPortBroadcast() {
+        IntentFilter filter = new IntentFilter(Intent.ACTION_TIME_TICK);
+        PortReceiver receiver = new PortReceiver();
+        registerReceiver(receiver, filter);
+    }
+
+    @Override
+    public void onTerminate() {
+        // 程序终止的时候执行
+        super.onTerminate();
+    }
+
+    @Override
+    public void onLowMemory() {
+        // 低内存的时候执行
+        super.onLowMemory();
+    }
+
+    @Override
+    public void onTrimMemory(int level) {
+        // 程序在内存清理的时候执行
+        super.onTrimMemory(level);
+    }
+
+}

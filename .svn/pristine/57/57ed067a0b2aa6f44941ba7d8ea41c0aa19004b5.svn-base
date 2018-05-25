@@ -1,0 +1,48 @@
+package com.mcloyal.serialport.utils;
+
+import com.mcloyal.serialport.exception.CRCException;
+
+/**
+ * CRC校验计算
+ * 作者：huangzhong on 2017/2/12 14:04
+ * 邮箱：mcloyal@163.com
+ */
+
+public class Crc16 {
+
+    private static int CRC16(byte[] Buf, int Len) {
+        int CRC;
+        int i, Temp;
+        CRC = 0xffff;
+        for (i = 0; i < Len; i++) {
+            CRC = CRC ^ byteToInteger(Buf[i]);
+            for (Temp = 0; Temp < 8; Temp++) {
+                if ((CRC & 0x01) == 1)
+                    CRC = (CRC >> 1) ^ 0x8408;//0x8408   0xa0
+                else
+                    CRC = CRC >> 1;
+            }
+        }
+        return CRC;
+    }
+
+    private static int byteToInteger(byte b) {
+        int value;
+        value = b & 0xff;
+        return value;
+    }
+
+    /**
+     * 计算CRC 返回两个字节的字节数组
+     *
+     * @param address
+     * @return
+     */
+    public static byte[] crcCalculateByte(byte[] address) throws CRCException {
+        if (address == null || address.length == 0) {
+            throw new CRCException("待计算字节数组为空");
+        }
+        int s = CRC16(address, address.length);
+        return NumberUtil.unsignedShortToByte2(s);
+    }
+}

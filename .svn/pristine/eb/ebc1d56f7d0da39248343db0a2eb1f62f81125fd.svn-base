@@ -1,0 +1,98 @@
+<?xml version="1.0" encoding="utf-8"?>
+<LinearLayout xmlns:android="http://schemas.android.com/apk/res/android"
+    android:layout_width="match_parent"
+    android:layout_height="match_parent"
+    android:gravity="center"
+    android:orientation="vertical">
+
+    <TextView
+        android:id="@+id/text_id"
+        android:layout_width="wrap_content"
+        android:layout_height="wrap_content"
+        android:text="sss" />
+
+
+    <Button
+        android:id="@+id/btn1"
+        android:layout_width="wrap_content"
+        android:layout_height="wrap_content"
+        android:text="AT卡检测"
+        android:textSize="30sp" />
+
+    <Button
+        android:id="@+id/btn2"
+        android:layout_width="wrap_content"
+        android:layout_height="wrap_content"
+        android:text="AT TCP连接"
+        android:textSize="30sp" />
+
+    <Button
+        android:id="@+id/btn3"
+        android:layout_width="wrap_content"
+        android:layout_height="wrap_content"
+        android:text="AT 透传"
+        android:textSize="30sp" />
+
+    <Button
+        android:id="@+id/btn31"
+        android:layout_width="wrap_content"
+        android:layout_height="wrap_content"
+        android:text="AT 全部命令"
+        android:textSize="30sp" />
+
+    <Button
+        android:id="@+id/btn32"
+        android:layout_width="wrap_content"
+        android:layout_height="wrap_content"
+        android:text="AT 退出透传"
+        android:textSize="30sp" />
+
+    <Button
+        android:id="@+id/btn33"
+        android:layout_width="wrap_content"
+        android:layout_height="wrap_content"
+        android:text="AT 信号检测"
+        android:textSize="30sp" />
+
+    <Button
+        android:id="@+id/btn4"
+        android:layout_width="wrap_content"
+        android:layout_height="wrap_content"
+        android:text="启动灌装"
+        android:textSize="30sp" />
+
+    <Button
+        android:id="@+id/btn5"
+        android:layout_width="wrap_content"
+        android:layout_height="wrap_content"
+        android:text="停止灌装"
+        android:textSize="30sp" />
+
+    <Button
+        android:id="@+id/btn6"
+        android:layout_width="wrap_content"
+        android:layout_height="wrap_content"
+        android:text="模块断电重启"
+        android:textSize="30sp" />
+
+    <Button
+        android:id="@+id/btn7"
+        android:layout_width="wrap_content"
+        android:layout_height="wrap_content"
+        android:text="网络连接状态"
+        android:textSize="30sp" />
+
+    <Button
+        android:id="@+id/btn8"
+        android:layout_width="wrap_content"
+        android:layout_height="wrap_content"
+        android:text="结算业务"
+        android:textSize="30sp" />
+
+    <Button
+        android:id="@+id/btn9"
+        android:layout_width="wrap_content"
+        android:layout_height="wrap_content"
+        android:text="套餐查询"
+        android:textSize="30sp" />
+</LinearLayout>

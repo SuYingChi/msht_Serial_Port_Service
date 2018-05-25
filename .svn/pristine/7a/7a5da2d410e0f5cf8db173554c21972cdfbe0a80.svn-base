@@ -1,0 +1,757 @@
+package com.mcloyal.serialport.service;
+
+import android.app.Service;
+import android.content.Intent;
+import android.os.Binder;
+import android.os.Handler;
+import android.os.IBinder;
+import android.os.Message;
+
+import com.mcloyal.serialport.AppLibsContext;
+import com.mcloyal.serialport.R;
+import com.mcloyal.serialport.constant.Cmd;
+import com.mcloyal.serialport.constant.Consts;
+import com.mcloyal.serialport.entity.Packet;
+import com.mcloyal.serialport.exception.AnalysisException;
+import com.mcloyal.serialport.exception.CRCException;
+import com.mcloyal.serialport.exception.CmdTypeException;
+import com.mcloyal.serialport.exception.FrameException;
+import com.mcloyal.serialport.utils.AnalysisUtils;
+import com.mcloyal.serialport.utils.ByteUtils;
+import com.mcloyal.serialport.utils.NumberUtil;
+import com.mcloyal.serialport.utils.PacketUtils;
+import com.mcloyal.serialport.utils.SpecialUtils;
+import com.mcloyal.serialport.utils.StringUtils;
+import com.mcloyal.serialport.utils.logs.LogUtils;
+
+import java.io.IOException;
+import java.io.InputStream;
+import java.io.OutputStream;
+import java.security.InvalidParameterException;
+import java.util.ArrayList;
+import java.util.Arrays;
+import java.util.Observable;
+import java.util.Observer;
+import java.util.concurrent.Executors;
+import java.util.concurrent.ScheduledExecutorService;
+import java.util.concurrent.TimeUnit;
+
+import android_serialport_api.SerialPort;
+
+/**
+ * 串口通信常驻后台Service
+ */
+public class PortService extends Service {
+    private final static String TAG = PortService.class.getSimpleName();
+    private AppLibsContext appLibsContext = null;
+    //主控制板为COM1，参数
+    protected SerialPort mSerialPort1;
+    protected static OutputStream mOutputStream1;
+    private static InputStream mInputStream1;
+    private ReadCom1Thread mReadThread1;
+    private ScheduledExecutorService scheduled1;
+    private ArrayList<Byte> data1 = new ArrayList<Byte>();
+    public static int PACKET_LEN1 = 100;//63
+
+    //通讯模块为COM2，参数
+    protected SerialPort mSerialPort2;
+    protected static OutputStream mOutputStream2;
+    private static InputStream mInputStream2;
+    private ReadCom2Thread mReadThread2;
+    private ScheduledExecutorService scheduled2;
+    private ArrayList<Byte> data2 = new ArrayList<Byte>();
+    public static int PACKET_LEN2 = 100;
+
+    //被观察者
+    private MyObservable mObservable;
+
+    //网络状态
+    private boolean isConnection = false;//是否连接网络的标记 false表示未联网，true表示联网成功
+
+
+    //常量值
+    private final static int COM1_SERIAL = 1;//COM1常量标记
+    private final static int COM2_SERIAL = 2;//COM2常量标记
+    private final static int RESTART = 3;//重启服务标记
+    private final static int FOR_CQS_TASK = 4;//5s检测信号强度标记
+    private final static int AT_CIPMODE_TASK = 5;//检测到信号强度后开始进行网络连接
+    private final static int AT_TCP_TASK = 6;//TCP连接任务
+
+    @Override
+    public void onCreate() {
+        super.onCreate();
+        mObservable = new MyObservable();
+        appLibsContext = (AppLibsContext) getApplication();
+        //开启COM1接收线程  主板和Android板之前数据通信
+        startCom1Received();
+        //启动COM1数据拼包线程
+        scheduled1 = Executors.newSingleThreadScheduledExecutor();
+        scheduled1.scheduleAtFixedRate(new PraserReadCom1Task(), 0, 100,
+                TimeUnit.MILLISECONDS);
+
+
+        //开启COM2接收线程 ,通信模块和Android板之间通信
+        startCom2Received();
+        //启动COM2数据拼包线程
+        scheduled2 = Executors.newSingleThreadScheduledExecutor();
+        scheduled2.scheduleAtFixedRate(new PraserReadCom2Task(), 0, 100,
+                TimeUnit.MILLISECONDS);
+    }
+
+    /*************************************主控制板COM1数据接收发（开始）***********************************/
+    /**
+     * COM1轮询线程任务
+     */
+    private class PraserReadCom1Task implements Runnable {
+        public void run() {
+            if (data1 != null && data1.size() > 3) {
+                int size = data1.size();
+                if (size >= PACKET_LEN1) {
+                    Byte[] data = data1.subList(0, PACKET_LEN1).toArray(new Byte[PACKET_LEN1]);
+                    if (data[0] != Consts.START_) {
+                        data1.clear();
+                        data1 = new ArrayList();
+                    } else {
+                        onDataCom1Received(data, data.length);
+                    }
+                }
+            }
+        }
+    }
+
+    /**
+     * 开启COM1口数据接收线程
+     */
+    private void startCom1Received() {
+        try {
+            mSerialPort1 = appLibsContext.getSerialPort1();
+            mOutputStream1 = mSerialPort1.getOutputStream();
+            mInputStream1 = mSerialPort1.getInputStream();
+            mReadThread1 = new ReadCom1Thread();
+            mReadThread1.start();
+        } catch (SecurityException e) {
+            LogUtils.d(TAG, getString(R.string.error_security));
+        } catch (IOException e) {
+            LogUtils.d(TAG, getString(R.string.error_unknown));
+        } catch (InvalidParameterException e) {
+            LogUtils.d(TAG, getString(R.string.error_configuration));
+        }
+    }
+
+    /**
+     * 读取COM1口数据
+     */
+    private class ReadCom1Thread extends Thread {
+        @Override
+        public void run() {
+            super.run();
+            while (!isInterrupted()) {
+                int size;
+                try {
+                    Thread.sleep(100);
+                    byte[] buffer = new byte[PACKET_LEN1];
+                    if (mInputStream1 == null) {
+                        LogUtils.d(TAG, "mInputStream1 is null");
+                        continue;
+                    }
+                    size = mInputStream1.read(buffer);
+                    if (size > 1) {//过滤出现一个单字节的数据包
+                        byte[] data = Arrays.copyOfRange(buffer, 0, size);
+                        LogUtils.d(TAG, "COM1接收到" + size + " 字节");
+                        LogUtils.d(TAG, "COM1接收数据data==" + ByteUtils.byte2hex(data));
+                        //有新的数据包
+                        if (data != null && data[0] == Consts.START_) {
+                            data1.clear();
+                            data1 = new ArrayList<>();
+                            if (size >= 3) {//包头+2字节长度
+                                int len = NumberUtil.byte2ToUnsignedShort(new byte[]{data[1], data[2]});
+                                PACKET_LEN1 = len + 1;//len不包含包头长度，1为包头的长度
+                            }
+                        }
+                        for (int i = 0; i < size; i++) {
+                            data1.add(data[i]);
+                        }
+                    }
+                } catch (Exception e) {
+                    e.printStackTrace();
+                    return;
+                }
+            }
+        }
+    }
+
+
+    /**
+     * COM1数据解析
+     *
+     * @param bf
+     * @param size
+     */
+    protected void onDataCom1Received(Byte[] bf, int size) {
+        byte buffer[] = new byte[size];
+        for (int i = 0; i < bf.length; i++) {
+            buffer[i] = bf[i];
+        }
+        data1.clear();
+        data1 = new ArrayList<>();
+        LogUtils.d(TAG, "COM1数据包完整 onDataCom1Received data==" + ByteUtils.byte2hex(buffer));
+        if (size >= PACKET_LEN1) {
+            try {
+                Packet packet = AnalysisUtils.analysisFrame(buffer, PACKET_LEN1);
+                if (packet != null) {
+                    //此处无需做CRC校验判断
+                    byte[] cmd = packet.getCmd();
+                    //此处不管网络状态如何先直接转送到COM2口，利用COM1的心跳探测来监听网络状态的连接情况
+                    sendToCom2(buffer);
+                    if (Arrays.equals(cmd, new byte[]{0x01, 0x05})) {
+//                        if (!isConnection) {
+//                            sendToCom1(Cmd.ComCmd._NONET_HEARTBEAT_);
+//                        }
+                        //不用在去处理是否联网了，直接把内容返回解决E82问题
+                        sendToCom1(Cmd.ComCmd._NONET_HEARTBEAT_);
+                    } else if (Arrays.equals(cmd, new byte[]{0x01, 0x04})) {//回复
+                        if (!isConnection) {
+                            sendToCom1(Cmd.ComCmd._NONET_AT104_);
+                        }
+                    }
+                    Message msg = Message.obtain();
+                    msg.obj = packet;
+                    msg.what = COM1_SERIAL;
+                    handler.sendMessage(msg);
+                }
+            } catch (AnalysisException e) {
+                e.printStackTrace();
+            }
+        }
+    }
+
+
+    /**
+     * 向com1发送操作指令
+     *
+     * @param cmd
+     */
+    public static void sendToCom1(byte[] cmd) {
+        if (mOutputStream1 != null && cmd != null) {
+            try {
+                LogUtils.d(TAG, "向COM1口发送：" + ByteUtils.byte2hex(cmd));
+                mOutputStream1.write(cmd);
+                mOutputStream1.flush();
+            } catch (IOException e) {
+                e.printStackTrace();
+            }
+        }
+    }
+    /*************************************主控制板COM1数据接收发（结束）***********************************/
+
+
+    /*************************************通信模块COM2数据接收发（开始）***********************************/
+    /**
+     * COM2轮询线程任务
+     */
+    private class PraserReadCom2Task implements Runnable {
+        public void run() {
+            if (data2 != null && data2.size() > 3) {
+                int size = data2.size();
+                if (size >= PACKET_LEN2) {
+                    Byte[] data = data2.subList(0, PACKET_LEN2).toArray(new Byte[PACKET_LEN2]);
+                    if (data[0] != Consts.START_) {
+                        data2.clear();
+                        data2 = new ArrayList();
+                    } else {
+                        onDataCom2Received(data, data.length);
+                    }
+                }
+            }
+        }
+    }
+
+    /**
+     * 开启COM2口数据接收线程
+     */
+    private void startCom2Received() {
+        try {
+            mSerialPort2 = appLibsContext.getSerialPort2();
+            mOutputStream2 = mSerialPort2.getOutputStream();
+            mInputStream2 = mSerialPort2.getInputStream();
+            //启动接收数据线程,根据isConnect的状态值进行数据读取判断
+            mReadThread2 = new ReadCom2Thread();
+            mReadThread2.start();
+        } catch (SecurityException e) {
+            LogUtils.d(TAG, getString(R.string.error_security));
+        } catch (IOException e) {
+            LogUtils.d(TAG, getString(R.string.error_unknown));
+        } catch (InvalidParameterException e) {
+            LogUtils.d(TAG, getString(R.string.error_configuration));
+        }
+    }
+
+    /**
+     * 读取COM2口数据
+     * 100毫秒
+     */
+    private class ReadCom2Thread extends Thread {
+        @Override
+        public void run() {
+            super.run();
+            while (!isInterrupted()) {
+                //如果是false 则先进行AT指令的发送
+                int size;
+                try {
+//                    Thread.sleep(100);
+                    byte[] buffer = new byte[PACKET_LEN2];
+                    if (mInputStream2 == null) {
+                        LogUtils.d(TAG, "mInputStream2  is null");
+                        continue;
+                    }
+                    size = mInputStream2.read(buffer);
+                    if (size > 1) {//过滤掉出现一个字节的0x00或者一个字节的0xff
+                        //接收到com2口返回的数据，此时需要停止倒计时
+                        if (scheduledTimer != null && !scheduledTimer.isShutdown()) {
+                            LogUtils.d(TAG, "COM2口接收到数据，停止倒计时监听。接收耗时：" + cTimes);
+                            scheduledTimer.shutdown();
+                        }
+                        byte[] data = Arrays.copyOfRange(buffer, 0, size);
+                        String context = new String(data, "UTF-8").trim().toUpperCase();
+                        LogUtils.d(TAG, "COM2接收到" + size + " 字节");
+                        LogUtils.d(TAG, "COM2接收字符串：" + context);
+                        LogUtils.d(TAG, "COM2接收数据data==" + ByteUtils.byte2hex(data));
+                        if (context.contains("+CSQ".toUpperCase().trim()) && context.contains("OK")) {
+                            //信号检测的返回 +CSQ
+                            LogUtils.d(TAG, "进入信号检测的返回:" + context);
+                            LogUtils.d(TAG, "读取信号强度成功");
+                            int csq = StringUtils.getcqs(context);
+                            LogUtils.d(TAG, "信号强度==" + csq);
+                            if (csq >= 10) {//信号强度超过10，进行网络连接
+                                if (scheduledCqs != null) {
+                                    scheduledCqs.shutdown();
+                                }
+                                LogUtils.d(TAG, "信号强度大于10，开始进行网络配置——透传连接");
+                                handler.sendEmptyMessage(AT_CIPMODE_TASK);
+                            }
+                        } else if (context.contains("CLOSED") || context.contains("DISCONNECT")) {//COM2网络模块主动触发断网消息
+                            isConnection = false;
+                            //监听到服务器连接断开，执行断电重启
+                            handler.sendEmptyMessage(RESTART);
+                        } else {
+                            if (isConnection) {//网络连接成功的情况下进行数据拼接
+                                if (data != null && data[0] == Consts.START_) {
+                                    data2.clear();
+                                    data2 = new ArrayList<>();
+                                    if (size >= 3) {//包头+2字节长度
+                                        int len = NumberUtil.byte2ToUnsignedShort(new byte[]{data[1], data[2]});
+                                        PACKET_LEN2 = len + 1;//len不包含包头长度，1为包头的长度
+                                    }
+                                }
+                                for (int i = 0; i < size; i++) {
+                                    data2.add(data[i]);
+                                }
+                            } else {
+                                if (context.startsWith("AT")) {
+                                    sb = new StringBuilder();
+                                }
+                                sb.append(context);
+                                LogUtils.d(TAG, "拼凑：" + sb.toString());
+                            }
+                        }
+                    }
+                } catch (Exception e) {
+                    e.printStackTrace();
+                    return;
+                }
+            }
+        }
+    }
+
+
+    /**
+     * 发送网络模块重启指令
+     */
+    public void sendNetRestart() {
+        //向主控板发送网络模块断电重启
+        isConnection = false;
+        if (scheduledCqs == null || scheduledCqs.isShutdown()) {//不为空，且不运行
+            sendToCom1(Cmd.ComCmd._RESTART_NET_);
+            csqTimes = 1;
+            //此处业务修改为使用CSQ指令查询信号状态，如果信号值大于10则进行透传设置和联网操作.5s钟循环检测
+            scheduledCqs = Executors.newSingleThreadScheduledExecutor();
+            scheduledCqs.scheduleAtFixedRate(new ForCsqTask(), 10, 5,
+                    TimeUnit.SECONDS);
+        }
+    }
+
+    //****网络状态
+    private ScheduledExecutorService scheduledCqs;
+    private int csqTimes = 1;//信号检测次数
+    private int csqMaxTimes = 8;//信号检测最大次数
+
+    /**
+     * AT信号检测倒计时线程
+     */
+    private class ForCsqTask implements Runnable {
+        public void run() {
+            csqTimes++;
+            if (csqTimes > csqMaxTimes) {//重启
+                LogUtils.d(TAG, "超过信号检测次数阈值，开始进行断电重启");
+                if (scheduledCqs != null) {
+                    scheduledCqs.shutdown();
+                }
+                if (scheduledTimer != null) {
+                    scheduledTimer.shutdown();
+                }
+                handler.sendEmptyMessage(RESTART);
+            } else {
+                LogUtils.d(TAG, "每5s执行一次信号检测....");
+                handler.sendEmptyMessage(FOR_CQS_TASK);
+            }
+        }
+    }
+
+    /**
+     * 网络状态标记字段
+     *
+     * @return
+     */
+    public boolean isConnection() {
+        return isConnection;
+    }
+
+    /**
+     * 发送AT指令进行网络连接
+     */
+    private void sendAtConnect(final long delayMillis, final byte[] ats) {
+        //向COM2口发送网络连接指令
+        new Handler().postDelayed(new Runnable() {
+            @Override
+            public void run() {
+                LogUtils.d(TAG, "sendAtConnect delayMillis=" + delayMillis + "ms；执行发送：" + ByteUtils.byte2hex(ats));
+                sendAtCmd(ats);//发送控制指令
+            }
+        }, delayMillis);
+    }
+
+    //****接收AT指令的等待状态
+    private ScheduledExecutorService scheduledAt;
+    private final static int AT_TIMEOUT_MAX = 10;
+    private int at_Times = 0;
+
+    /**
+     * 发送AT控制指令
+     *
+     * @param cmd
+     */
+    public void sendAtCmd(byte[] cmd) {
+        try {
+            if (mOutputStream2 != null && cmd != null) {
+                //此处启动一个定时任务，如果
+                //线程为空或者已经被关闭，则启动倒计时
+                if (Arrays.equals(Cmd.AT._CIP_CSQ_.getBytes(), cmd)) {//信号检测AT指令
+                    LogUtils.d(TAG, "信号检测指令 发送AT:" + new String(cmd));
+                    mOutputStream2.write(cmd);
+                    mOutputStream2.flush();
+                } else {
+                    if (scheduledAt == null || scheduledAt.isShutdown()) {//不为空且已经关闭
+                        LogUtils.d(TAG, "启动AT数据返回监听计时");
+                        mOutputStream2.write(cmd);
+                        mOutputStream2.flush();
+                        LogUtils.d(TAG, "发送AT:" + new String(cmd));
+                        isConnection = false;
+                        at_Times = 0;
+                        scheduledAt = Executors.newSingleThreadScheduledExecutor();
+                        scheduledAt.scheduleAtFixedRate(new ATTimeTask(), 0, 1,
+                                TimeUnit.SECONDS);
+                    }
+                }
+            }
+        } catch (Exception e) {
+            e.printStackTrace();
+        }
+    }
+
+    //AT返回数据集合
+    private StringBuilder sb = new StringBuilder();
+
+    /**
+     * AT接收倒计时线程
+     */
+    private class ATTimeTask implements Runnable {
+        public void run() {
+            at_Times++;
+            if (at_Times > AT_TIMEOUT_MAX) {
+                scheduledAt.shutdown();
+                if (scheduledCqs != null) {
+                    scheduledCqs.shutdown();
+                }
+                LogUtils.d(TAG, "AT接收达到设定阈值，开始进行数据包解析");
+                String context = sb.toString();
+                LogUtils.d(TAG, at_Times + "s 后接收AT数据包为：" + context);
+                if (context.contains(Cmd.AT._CIP_MODE_.toUpperCase().trim()) && context.contains("OK")) {//收到设置透传时的指令
+                    LogUtils.d(TAG, "进入设置透传返回");
+                    LogUtils.d(TAG, "设置透传成功，开始进行TCP连接");
+                    //设置TCP连接
+                    handler.sendEmptyMessage(AT_TCP_TASK);
+                } else if (context.contains("CONNECT") && context.contains("OK") && !context.contains("DIS") && !context.contains("FAIL")) {
+                    LogUtils.d(TAG, "网络连接成功");
+                    if (scheduledCqs != null) {
+                        scheduledCqs.shutdown();
+                    }
+                    isConnection = true;
+                } else {
+                    //若接收时间超出设定的阈值时间则进行断电重连
+                    LogUtils.d(TAG, "ATTimeTask 无对应条件，执行断电重启");
+                    handler.sendEmptyMessage(RESTART);
+                }
+                sb = new StringBuilder();
+            }
+        }
+    }
+
+    /**
+     * COM2数据解析
+     *
+     * @param bf
+     * @param size
+     */
+    protected void onDataCom2Received(Byte[] bf, int size) {
+        byte buffer[] = new byte[size];
+        for (int i = 0; i < bf.length; i++) {
+            buffer[i] = bf[i];
+        }
+        data2.clear();
+        data2 = new ArrayList<>();
+        LogUtils.d(TAG, "COM2数据包完整 onDataCom2Received data==" + ByteUtils.byte2hex(buffer));
+        if (size >= PACKET_LEN2) {
+            try {
+                Packet packet = AnalysisUtils.analysisFrame(buffer, PACKET_LEN2);
+                if (packet != null) {
+                    //服务器下发107包时则启动第二功能键
+                    if (Arrays.equals(packet.getCmd(), new byte[]{0x01, 0x07})) {
+                        try {
+                            //封装数据返回207到服务器
+                            byte[] frame = packet.getFrame();
+//                            byte repy[] = Cmd.get207Rept(frame);
+                            byte repy[] = PacketUtils.makePackage(frame, new byte[]{0x02, 0x07}, null);
+                            if (repy != null && repy.length > 0) {
+                                LogUtils.d(TAG, "回复207指令类型");
+                                sendToCom2(repy);
+                            }
+                        } catch (CRCException e) {
+                            e.printStackTrace();
+                        } catch (FrameException e) {
+                            e.printStackTrace();
+                        } catch (CmdTypeException e) {
+                            e.printStackTrace();
+                        }
+                    } else {
+                        //COM2接收到的数据直接转发给
+                        sendToCom1(buffer);
+                    }
+                    Message msg = Message.obtain();
+                    msg.obj = packet;
+                    msg.what = COM2_SERIAL;
+                    handler.sendMessage(msg);
+                }
+            } catch (AnalysisException e) {
+                e.printStackTrace();
+            }
+        }
+    }
+
+    /**
+     * 向com2发送操作指令
+     *
+     * @param cmd
+     */
+    public void sendToCom2(byte[] cmd) {
+        if (mOutputStream2 != null && cmd != null) {
+            try {
+                LogUtils.d(TAG, "向COM2口发送：" + ByteUtils.byte2hex(cmd));
+                mOutputStream2.write(cmd);
+                mOutputStream2.flush();
+                //线程为空或者已经被关闭，则启动倒计时
+                if (scheduledTimer == null || scheduledTimer.isShutdown()) {
+                    LogUtils.d(TAG, "启动COM2监听计时");
+                    cTimes = 0;
+                    scheduledTimer = Executors.newSingleThreadScheduledExecutor();
+                    scheduledTimer.scheduleAtFixedRate(new NetTimeTask(), 0, 1,
+                            TimeUnit.SECONDS);
+                }
+            } catch (IOException e) {
+                e.printStackTrace();
+            }
+        }
+    }
+
+    //****网络状态
+    private ScheduledExecutorService scheduledTimer;
+    private final static int NET_TIMEOUT_MAX = 40;//40s的延时等待，若40s内未收到回复则判定为断网，之前为40s
+    private int cTimes = 0;
+
+    /**
+     * COM2接收数据倒计时线程
+     */
+    private class NetTimeTask implements Runnable {
+        public void run() {
+            cTimes++;
+            if (cTimes > NET_TIMEOUT_MAX) {//超过预设的最大超时时间
+                scheduledTimer.shutdown();
+                if (scheduledCqs != null) {
+                    scheduledCqs.shutdown();
+                }
+                LogUtils.d(TAG, "监听数据接收，接收超时，断电重连......");
+                //若接收时间超出设定的阈值时间则进行断电重连
+                handler.sendEmptyMessage(RESTART);
+            }
+        }
+    }
+
+    /*************************************通信模块COM2数据接收发（结束）***********************************/
+
+    @Override
+    public int onStartCommand(Intent intent, int flags, int startId) {
+        return super.onStartCommand(intent, flags, startId);
+    }
+
+    @Override
+    public void onStart(Intent intent, int startId) {
+        super.onStart(intent, startId);
+    }
+
+    @Override
+    public void onDestroy() {
+        super.onDestroy();
+        if (scheduled1 != null) {
+            scheduled1.shutdown();
+        }
+        if (scheduled2 != null) {
+            scheduled2.shutdown();
+        }
+        if (scheduledTimer != null) {
+            scheduledTimer.shutdown();
+        }
+    }
+
+    @Override
+    public IBinder onBind(Intent arg0) {
+        return new LocalBinder();
+    }
+
+    public final class LocalBinder extends Binder {
+        public PortService getService() {
+            return PortService.this;
+        }
+    }
+
+
+    /************************************观察者模式通知数据更新（开始）*************************************/
+    public class MyObservable extends Observable {
+        private Packet com1Packet;
+        private Packet com2Packet;
+        private boolean skeyEnable;//第二功能按键的启用和停用标记，true表示启用，false表示停止
+
+        public boolean isSkeyEnable() {
+            return skeyEnable;
+        }
+
+        public Packet getCom1Packet() {
+            return com1Packet;
+        }
+
+        public void setCom1Packet(Packet com1Packet) {
+            if (com1Packet != null) {
+                this.com2Packet = null;//重置上一次更新的数据
+                this.com1Packet = com1Packet;
+                setChanged();
+                notifyObservers();
+                if (Arrays.equals(com1Packet.getCmd(), new byte[]{0x01, 0x04})) {
+                    //判断第二功能按键是否启用
+                    try {
+                        skeyEnable = SpecialUtils.sKeyEnable(com1Packet);
+                    } catch (CmdTypeException e) {
+                        e.printStackTrace();
+                    }
+                }
+            }
+        }
+
+        public Packet getCom2Packet() {
+            return com2Packet;
+        }
+
+        public void setCom2Packet(Packet com2Packet) {
+            if (com2Packet != null) {
+                this.com1Packet = null;//重置上一次更新的数据
+                this.com2Packet = com2Packet;
+                setChanged();
+                notifyObservers();
+                //服务器下发107包时则启动第二功能键
+                if (Arrays.equals(com2Packet.getCmd(), new byte[]{0x01, 0x07})) {
+                    skeyEnable = true;
+                }
+            }
+        }
+    }
+
+    /**
+     * 添加观察者
+     *
+     * @param observer
+     */
+    public void addObserver(Observer observer) {
+        if (mObservable == null) {
+            mObservable = new MyObservable();
+        }
+        mObservable.addObserver(observer);
+    }
+
+    /**
+     * 移除观察者
+     *
+     * @param observer
+     */
+    public void removeObserver(Observer observer) {
+        if (mObservable != null) {
+            mObservable.deleteObserver(observer);
+        }
+    }
+
+    private Handler handler = new Handler() {
+        @Override
+        public void handleMessage(Message msg) {
+            switch (msg.what) {
+                case COM1_SERIAL:
+                    Packet packet1 = (Packet) msg.obj;
+                    if (mObservable != null && packet1 != null) {
+                        mObservable.setCom1Packet(packet1);
+                    }
+                    break;
+                case COM2_SERIAL:
+                    Packet packet2 = (Packet) msg.obj;
+                    if (mObservable != null && packet2 != null) {
+                        mObservable.setCom2Packet(packet2);
+                    }
+                    break;
+                case RESTART://重启服务
+                    if (scheduledTimer != null) {
+                        scheduledTimer.shutdown();
+                    }
+                    if (scheduledCqs != null) {
+                        scheduledCqs.shutdown();
+                    }
+                    LogUtils.d(TAG, "执行AT断电重启操作");
+                    sendNetRestart();
+                    break;
+                case FOR_CQS_TASK://执行每5s检测一次卡信号
+                    sendAtConnect(10, Cmd.AT._CIP_CSQ_.getBytes());//每5s检测一次卡信号
+                    break;
+                case AT_CIPMODE_TASK://进行网络配置——透传设置
+                    sendAtConnect(1000, Cmd.AT._CIP_MODE_.getBytes());
+                    break;
+                case AT_TCP_TASK://TCP网络连接
+                    sendAtConnect(10, Cmd.AT._CIP_START_.getBytes());
+                    break;
+            }
+        }
+    };
+    /************************************观察者模式通知数据更新（结束）*************************************/
+}
