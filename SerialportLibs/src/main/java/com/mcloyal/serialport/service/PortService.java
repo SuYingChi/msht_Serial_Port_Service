@@ -3,7 +3,6 @@ package com.mcloyal.serialport.service;
 import android.app.Service;
 import android.content.Intent;
 import android.os.Binder;
-import android.os.CountDownTimer;
 import android.os.Handler;
 import android.os.IBinder;
 import android.os.Message;
@@ -32,10 +31,10 @@ import java.io.InputStream;
 import java.io.OutputStream;
 import java.lang.ref.WeakReference;
 import java.security.InvalidParameterException;
-import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.Observable;
 import java.util.Observer;
+import java.util.Vector;
 import java.util.concurrent.Callable;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
@@ -56,42 +55,43 @@ public class PortService extends Service {
     protected SerialPort mSerialPort1;
     protected static OutputStream mOutputStream1;
     private static InputStream mInputStream1;
-    private ReadCom1Thread mReadThread1;
+    private ReadCom1DataThread mReadThread1;
     private ScheduledExecutorService scheduled1;
-    private ArrayList<Byte> data1 = new ArrayList<Byte>();
-    public static int PACKET_LEN1 = 100;//63
+    private Vector<Byte> data1 = new Vector<Byte>();
+    public static volatile int PACKET_LEN1 = 100;//63
 
     //通讯模块为COM2，参数
     protected SerialPort mSerialPort2;
     protected static OutputStream mOutputStream2;
     private static InputStream mInputStream2;
-    private ReadCom2Thread mReadThread2;
+    private ReadCom2DataThread mReadThread2;
     private ScheduledExecutorService scheduled2;
-    private ArrayList<Byte> data2 = new ArrayList<Byte>();
-    public static int PACKET_LEN2 = 100;
-    private CountDownTimer Timer;
+    private  Vector<Byte> data2 = new Vector<Byte>();
+    public static volatile int PACKET_LEN2 = 100;
+   // private CountDownTimer Timer;
     //被观察者
     private MyObservable mObservable;
 
     //网络状态
-    private boolean isConnection = false;//是否连接网络的标记 false表示未联网，true表示联网成功
+    private volatile boolean  isConnection = false;//是否连接网络的标记 false表示未联网，true表示联网成功
+    private volatile boolean isNetIng = false;//是否在联网中
 
     //常量值
     private final static int COM1_SERIAL = 1;//COM1常量标记
     private final static int COM2_SERIAL = 2;//COM2常量标记
-    private final static int COM1_COUNT = 4;//COM2常量标记
+   // private final static int COM1_COUNT = 4;//COM2常量标记
     private final static int RESTART = 3;//重启服务标记
 
     private final static int MAX_PGK_TIME = 5;//最大包数，根据改数值判断是否联网
-    private static int pgkTime = 0;//发送包数据计数
-    private static int TCP_MAXOUTTIME = 10 * 1000;//TCP连接返回值等待时间
+    private static volatile int pgkTime = 0;//发送包数据计数
+    private final static int TCP_MAX_OUT_TIME = 10 * 1000;//TCP连接返回值等待时间
 
     private ScheduledExecutorService countScheduled;//倒计时线程，如果在指定时间内未收到com1口的105数据，则断电重启
-    private static int count = 0;//
-    private static int com104Count=0;
+    private static volatile int count = 0;//
+   /* private static int com104Count=0;
     private static int second=0;  //104接收到计时10秒
     private static boolean isStart=true;
-    private ScheduledExecutorService secondScheduled;
+    private ScheduledExecutorService secondScheduled;*/
 
     @Override
     public void onCreate() {
@@ -99,10 +99,10 @@ public class PortService extends Service {
         mObservable = new MyObservable();
         appLibsContext = (AppLibsContext) getApplication();
         //开启COM1接收线程  主板和Android板之前数据通信
-        startCom1Received();
+        startReadCom1Thread();
         //启动COM1数据拼包线程
         scheduled1 = Executors.newSingleThreadScheduledExecutor();
-        scheduled1.scheduleAtFixedRate(new PraserReadCom1Task(), 0, 100,
+        scheduled1.scheduleAtFixedRate(new ParserCom1ReceivedDataTask(), 0, 100,
                 TimeUnit.MILLISECONDS);
 
         //开启COM2接收线程 ,通信模块和Android板之间通信
@@ -132,16 +132,16 @@ public class PortService extends Service {
     /**
      * COM1轮询线程任务
      */
-    private class PraserReadCom1Task implements Runnable {
+    private class ParserCom1ReceivedDataTask implements Runnable {
         public void run() {
             LogUtils.d(TAG, "PraserReadCom1Task线程");
             if (data1 != null && data1.size() >= PACKET_LEN1) {
                 Byte[] data = data1.subList(0, PACKET_LEN1).toArray(new Byte[PACKET_LEN1]);
                 if (data[0] != Consts.START_) {
                     data1.clear();
-                    data1 = new ArrayList();
+                    //data1 = new ArrayList();
                 } else {
-                    onDataCom1Received(data, data.length);
+                    parserCom1Data(data, data.length);
                 }
             }
         }
@@ -150,12 +150,12 @@ public class PortService extends Service {
     /**
      * 开启COM1口数据接收线程
      */
-    private void startCom1Received() {
+    private void startReadCom1Thread() {
         try {
             mSerialPort1 = appLibsContext.getSerialPort1();
             mOutputStream1 = mSerialPort1.getOutputStream();
             mInputStream1 = mSerialPort1.getInputStream();
-            mReadThread1 = new ReadCom1Thread();
+            mReadThread1 = new ReadCom1DataThread();
             mReadThread1.start();
         } catch (SecurityException e) {
             LogUtils.d(TAG, getString(R.string.error_security));
@@ -169,7 +169,7 @@ public class PortService extends Service {
     /**
      * 读取COM1口数据
      */
-    private class ReadCom1Thread extends Thread {
+    private class ReadCom1DataThread extends Thread {
         private volatile  boolean stopRunning =false;
 
         @Override
@@ -189,16 +189,16 @@ public class PortService extends Service {
                         LogUtils.d(TAG, "COM1接收到" + size + " 字节");
                         LogUtils.d(TAG, "COM1接收数据data==" + ByteUtils.byte2hex(data));
                         //有新的数据包
-                        if (data != null && data[0] == Consts.START_) {
+                        if (  data[0] == Consts.START_) {
                             data1.clear();
-                            data1 = new ArrayList<>();
+                            //data1 = new ArrayList<>();
                             if (size >= 3) {//包头+2字节长度
                                 int len = NumberUtil.byte2ToUnsignedShort(new byte[]{data[1], data[2]});
                                 PACKET_LEN1 = len + 1;//len不包含包头长度，1为包头的长度
                             }
                         }
-                        for (int i = 0; i < data.length; i++) {
-                            data1.add(data[i]);
+                        for (byte aData : data) {
+                            data1.add(aData);
                         }
                         //在此处进行包条件对比
 
@@ -222,21 +222,21 @@ public class PortService extends Service {
      * @param bf
      * @param size
      */
-    protected void onDataCom1Received(Byte[] bf, int size) {
+    protected void parserCom1Data(Byte[] bf, int size) {
         byte buffer[] = new byte[size];
         for (int i = 0; i < bf.length; i++) {
             buffer[i] = bf[i];
         }
         data1.clear();
-        data1 = new ArrayList<>();
-        LogUtils.d(TAG, "COM1数据包完整 onDataCom1Received data==" + ByteUtils.byte2hex(buffer));
+        //data1 = new ArrayList<>();
+        LogUtils.d(TAG, "COM1数据包完整 parserCom1Data data==" + ByteUtils.byte2hex(buffer));
         if (size >= PACKET_LEN1) {
             try {
                 Packet packet = AnalysisUtils.analysisFrame(buffer, PACKET_LEN1);
                 if (packet != null) {
                     //此处无需做CRC校验判断
                     byte[] cmd = packet.getCmd();
-                    //不管是否断网都直接转发固定205
+                    //不管是否断网都直接转发固定105
                     byte[] frame=packet.getFrame();
                     if (Arrays.equals(cmd, new byte[]{0x01, 0x05})) {
                         LogUtils.d(TAG, "COM1接收到105，重置倒计时操作");
@@ -246,7 +246,7 @@ public class PortService extends Service {
                     }else if (Arrays.equals(cmd, new byte[]{0x01, 0x04})){ //COM1接收到104 直接回复
                         responseCom104(frame);
                     }
-                    if (isConnection == true) {//如果在联网的情况下直接把数据转发到TCP平台
+                    if (isConnection) {//如果在联网的情况下直接把数据转发到TCP平台
                         LogUtils.d(TAG, "上送到服务器" + ByteUtils.byte2hex(buffer));
                         if (Arrays.equals(cmd, new byte[]{0x01, 0x05})) {
                             pgkTime++;
@@ -343,7 +343,7 @@ public class PortService extends Service {
                     Byte[] data = data2.subList(0, PACKET_LEN2).toArray(new Byte[PACKET_LEN2]);
                     if (data[0] != Consts.START_) {
                         data2.clear();
-                        data2 = new ArrayList();
+                        //data2 = new ArrayList();
                     } else {
                         onDataCom2Received(data, data.length);
                     }
@@ -361,7 +361,7 @@ public class PortService extends Service {
             mOutputStream2 = mSerialPort2.getOutputStream();
             mInputStream2 = mSerialPort2.getInputStream();
             //启动接收数据线程,根据isConnect的状态值进行数据读取判断
-            mReadThread2 = new ReadCom2Thread();
+            mReadThread2 = new ReadCom2DataThread();
             mReadThread2.start();
         } catch (SecurityException e) {
             LogUtils.d(TAG, getString(R.string.error_security));
@@ -376,7 +376,7 @@ public class PortService extends Service {
      * 读取COM2口数据
      * 100毫秒
      */
-    private class ReadCom2Thread extends Thread {
+    private class ReadCom2DataThread extends Thread {
         private volatile boolean stopRunning =false;
 
         @Override
@@ -408,7 +408,7 @@ public class PortService extends Service {
                             if (isConnection) {//网络连接成功的情况下进行数据拼接
                                 if (data != null && data[0] == Consts.START_) {
                                     data2.clear();
-                                    data2 = new ArrayList<>();
+                                    //data2 = new ArrayList<>();
                                     if (size >= 3) {//包头+2字节长度
                                         int len = NumberUtil.byte2ToUnsignedShort(new byte[]{data[1], data[2]});
                                         PACKET_LEN2 = len + 1;//len不包含包头长度，1为包头的长度
@@ -432,15 +432,12 @@ public class PortService extends Service {
         }
     }
 
-
-    private boolean isNetIng = false;//是否在联网中
-
     /**
      * 发送网络模块重启指令
      */
-    public void sendNetRestart() {
+    public void sendNetRestartCmd() {
         //向主控板发送网络模块断电重启
-        if (isNetIng == false) {
+        if (!isNetIng) {
             isConnection = false;
             pgkTime = 0;//重置计数
             sendToCom1(Cmd.ComCmd._RESTART_NET_);//发送断电重启
@@ -456,17 +453,36 @@ public class PortService extends Service {
 
     private ScheduledExecutorService atScheduled;//AT指令操作线程
 
+/*    private ForAtTaskHandler forAtTaskHandler;
+
+    private static class ForAtTaskHandler extends Handler{
+        ForAtTaskHandler(Looper looper){
+            super(looper);
+        }
+
+        @Override
+        public void handleMessage(Message msg) {
+            super.handleMessage(msg);
+            LogUtils.d(TAG,"ForAtTaskHandler 收到At线程的消息");
+            String atcontext = (String) msg.obj;
+            //接收到处理结果后开始处理结果.............
+        }
+    }*/
+
+
     /**
      * AT指令操作，包含信号检测，透传设置，TCP连接
      */
     private class ForAtTask implements Runnable {
         public void run() {
+            //forAtTaskHandler = new ForAtTaskHandler(Looper.myLooper());
             LogUtils.d(TAG, "ForAtTask开始执行");
             boolean isCsq = false;//默认未达到可以进行透传指令的设置操作
             int csqmax = 5;//信号检测最大次数
             //检测AT信号状态
             for (int i = 1; i <= csqmax; i++) {
                 LogUtils.e(TAG, "信号检测：开始第" + (i) + "次信号检测");
+                //ForAtTask的执行线程会阻塞到sendAtCmd返回结果
                 String atcontext = sendAtCmd(Cmd.AT._CIP_CSQ_.getBytes(), 2 * 1000);//延时2s读取管道数据
                 LogUtils.d(TAG, "信号检测返回：" + atcontext);
                 if (!TextUtils.isEmpty(atcontext) && atcontext.contains("+CSQ") && atcontext.contains("OK")) {
@@ -482,12 +498,12 @@ public class PortService extends Service {
                 }
                 SystemClock.sleep(1000);//等待1s继续执行
             }
-            if (isCsq == true) {
+            if (isCsq) {
                 //如果信号检测符合继续进行下一步的条件，则执行设置透传指令发送
                 String modeContext = sendAtCmd(Cmd.AT._CIP_MODE_.getBytes(), 1 * 1000);
                 LogUtils.d(TAG, "透传返回内容：" + modeContext);
                 if (!TextUtils.isEmpty(modeContext) && modeContext.contains("OK")) {//设置透传成功
-                    String tcpContext = sendAtCmd(Cmd.AT._CIP_START_.getBytes(), TCP_MAXOUTTIME);
+                    String tcpContext = sendAtCmd(Cmd.AT._CIP_START_.getBytes(), TCP_MAX_OUT_TIME);
                     LogUtils.d(TAG, "TCP返回内容：" + tcpContext);
                     if (!TextUtils.isEmpty(tcpContext) && tcpContext.contains("CONNECT") && !tcpContext.contains("DIS") && !tcpContext.contains("FAIL")) {
                         isNetIng = false;//设置网络连接流程结束标记
@@ -534,7 +550,7 @@ public class PortService extends Service {
     public String sendAtCmd(final byte[] atcmd, final long time) {
         final ExecutorService exec = Executors.newFixedThreadPool(1);
         Callable<String> call = new Callable<String>() {
-            public String call() throws Exception {//开始执行耗时操作
+            public String call() throws Exception {//开始执行耗时操作,在子线程
                 try {
                     if (mOutputStream2 != null && atcmd != null) {
                         mOutputStream2.write(atcmd);
@@ -546,8 +562,8 @@ public class PortService extends Service {
                     LogUtils.d(TAG, "AT返回数据size==" + size);
                     if (size > 1) {
                         byte[] data = Arrays.copyOfRange(buffer, 0, size);
-                        String context = new String(data, "UTF-8").trim().toUpperCase();
-                        return context;
+                        return new String(data, "UTF-8").trim().toUpperCase();
+
                     }
                 } catch (Exception e) {
                     e.printStackTrace();
@@ -559,7 +575,11 @@ public class PortService extends Service {
             Future<String> future = exec.submit(call);
             // 关闭线程池
             exec.shutdown();
+            //该方法在ForAtTask里执行，所以此时是在ForAtTask的执行线程里了，get阻塞ForAtTask的执行线程，
             String obj = future.get(time + 2000, TimeUnit.MILLISECONDS); //任务处理超时时间在等待的基础上加2000
+         /*   Message message = new Message();
+            message.obj = obj;
+            forAtTaskHandler.sendMessage(message);*/
             return obj;
         } catch (TimeoutException ex) {
             LogUtils.d(TAG, "获取AT指令处理超时，处理失败！");
@@ -581,7 +601,7 @@ public class PortService extends Service {
             buffer[i] = bf[i];
         }
         data2.clear();
-        data2 = new ArrayList<>();
+        //data2 = new ArrayList<>();
         LogUtils.d(TAG, "COM2数据包完整 onDataCom2Received data==" + ByteUtils.byte2hex(buffer));
         if (size >= PACKET_LEN2) {
             try {
@@ -776,7 +796,7 @@ public class PortService extends Service {
                     break;
                 case RESTART://重启服务
 //                    LogUtils.d(TAG, "handler执行断电重启");
-                    sendNetRestart();
+                    sendNetRestartCmd();
                     break;
             }
         }
@@ -808,7 +828,7 @@ public class PortService extends Service {
                     break;
                 case RESTART://重启服务
 //                    LogUtils.d(TAG, "handler执行断电重启");
-                    weakPortService.get().sendNetRestart();
+                    weakPortService.get().sendNetRestartCmd();
                     break;
             }
         }

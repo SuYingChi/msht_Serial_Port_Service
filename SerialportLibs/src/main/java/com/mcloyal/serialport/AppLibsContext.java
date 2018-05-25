@@ -35,7 +35,7 @@ public class AppLibsContext extends Application implements Observer {
                 portService = service;
                 if (portService != null) {
                     LogUtils.d(TAG, "AppLibsContext onServiceConnected() 断电重启");
-                    portService.sendNetRestart();
+                    portService.sendNetRestartCmd();
                 }
             }
         });

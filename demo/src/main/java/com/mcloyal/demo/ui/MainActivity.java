@@ -4,7 +4,6 @@ import android.content.Intent;
 import android.os.Bundle;
 import android.os.Handler;
 import android.os.Message;
-import android.os.SystemClock;
 import android.view.View;
 
 import com.mcloyal.demo.R;
@@ -110,7 +109,7 @@ public class MainActivity extends BaseActivity implements Observer, Handler.Call
             case R.id.btn6://网络模块断电重启
                 if (portService != null) {
                     LogUtils.d(TAG, "网络模块断电重启");
-                    portService.sendNetRestart();
+                    portService.sendNetRestartCmd();
                 }
                 break;
             case R.id.btn32://退出透传
