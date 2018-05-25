@@ -42,6 +42,7 @@ import java.util.concurrent.Future;
 import java.util.concurrent.ScheduledExecutorService;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.TimeoutException;
+import java.util.concurrent.atomic.AtomicInteger;
 
 import android_serialport_api.SerialPort;
 
@@ -83,11 +84,11 @@ public class PortService extends Service {
     private final static int RESTART = 3;//重启服务标记
 
     private final static int MAX_PGK_TIME = 5;//最大包数，根据改数值判断是否联网
-    private static volatile int pgkTime = 0;//发送包数据计数
+    private static AtomicInteger  pgkTime = new AtomicInteger(0);;//发送包数据计数
     private final static int TCP_MAX_OUT_TIME = 10 * 1000;//TCP连接返回值等待时间
 
     private ScheduledExecutorService countScheduled;//倒计时线程，如果在指定时间内未收到com1口的105数据，则断电重启
-    private static volatile int count = 0;//
+    private static  AtomicInteger  count = new AtomicInteger(0);//
    /* private static int com104Count=0;
     private static int second=0;  //104接收到计时10秒
     private static boolean isStart=true;
@@ -117,9 +118,9 @@ public class PortService extends Service {
         countScheduled.scheduleAtFixedRate(new Runnable() {
                                                @Override
                                                public void run() {
-                                                   count++;
-                                                   if (count > maxCount) {
-                                                       count = 0;
+                                                  int incrementAndGet = count.incrementAndGet();
+                                                   if (incrementAndGet > maxCount) {
+                                                       count.set(0);
                                                        LogUtils.d(TAG, maxCount + "s 倒计时结束，执行断电重启");
                                                        handler.sendEmptyMessage(RESTART);
                                                    }
@@ -240,7 +241,7 @@ public class PortService extends Service {
                     byte[] frame=packet.getFrame();
                     if (Arrays.equals(cmd, new byte[]{0x01, 0x05})) {
                         LogUtils.d(TAG, "COM1接收到105，重置倒计时操作");
-                        count = 0;//重置倒计时计时
+                        count.set(0); //重置倒计时计时
                        // sendToCom1(Cmd.ComCmd._NONET_HEARTBEAT_);
                         responseCom105(frame);
                     }else if (Arrays.equals(cmd, new byte[]{0x01, 0x04})){ //COM1接收到104 直接回复
@@ -249,9 +250,9 @@ public class PortService extends Service {
                     if (isConnection) {//如果在联网的情况下直接把数据转发到TCP平台
                         LogUtils.d(TAG, "上送到服务器" + ByteUtils.byte2hex(buffer));
                         if (Arrays.equals(cmd, new byte[]{0x01, 0x05})) {
-                            pgkTime++;
-                            LogUtils.e(TAG, "数据包发送次数：" + pgkTime);
-                            if (pgkTime > MAX_PGK_TIME) {//如果超过最大包数判断
+                            int incrementAndGet= pgkTime.incrementAndGet();
+                            LogUtils.e(TAG, "数据包发送次数：" + incrementAndGet);
+                            if (incrementAndGet > MAX_PGK_TIME) {//如果超过最大包数判断
                                 LogUtils.d(TAG, "已经超过最大包数阈值，执行断电重启");
                                 handler.sendEmptyMessage(RESTART);
                             }
@@ -406,7 +407,7 @@ public class PortService extends Service {
                                 handler.sendEmptyMessage(RESTART);
                             }
                             if (isConnection) {//网络连接成功的情况下进行数据拼接
-                                if (data != null && data[0] == Consts.START_) {
+                                if ( data[0] == Consts.START_) {
                                     data2.clear();
                                     //data2 = new ArrayList<>();
                                     if (size >= 3) {//包头+2字节长度
@@ -439,7 +440,7 @@ public class PortService extends Service {
         //向主控板发送网络模块断电重启
         if (!isNetIng) {
             isConnection = false;
-            pgkTime = 0;//重置计数
+            pgkTime.set(0);//重置计数
             sendToCom1(Cmd.ComCmd._RESTART_NET_);//发送断电重启
             LogUtils.d(TAG, "开始启动AT操作指令发送");
             isNetIng = true;//网络连接流程标记，正在联网中
@@ -500,7 +501,7 @@ public class PortService extends Service {
             }
             if (isCsq) {
                 //如果信号检测符合继续进行下一步的条件，则执行设置透传指令发送
-                String modeContext = sendAtCmd(Cmd.AT._CIP_MODE_.getBytes(), 1 * 1000);
+                String modeContext = sendAtCmd(Cmd.AT._CIP_MODE_.getBytes(), 1000);
                 LogUtils.d(TAG, "透传返回内容：" + modeContext);
                 if (!TextUtils.isEmpty(modeContext) && modeContext.contains("OK")) {//设置透传成功
                     String tcpContext = sendAtCmd(Cmd.AT._CIP_START_.getBytes(), TCP_MAX_OUT_TIME);
@@ -508,7 +509,7 @@ public class PortService extends Service {
                     if (!TextUtils.isEmpty(tcpContext) && tcpContext.contains("CONNECT") && !tcpContext.contains("DIS") && !tcpContext.contains("FAIL")) {
                         isNetIng = false;//设置网络连接流程结束标记
                         LogUtils.d(TAG, "网络连接成功,启动COM2数据接收服务");
-                        pgkTime = 0;//重置计数
+                        pgkTime .set(0);//重置计数
                         isConnection = true;
                     } else {
                         LogUtils.d(TAG, "判断为TCP连接不成功，执断电重启");
@@ -576,11 +577,11 @@ public class PortService extends Service {
             // 关闭线程池
             exec.shutdown();
             //该方法在ForAtTask里执行，所以此时是在ForAtTask的执行线程里了，get阻塞ForAtTask的执行线程，
-            String obj = future.get(time + 2000, TimeUnit.MILLISECONDS); //任务处理超时时间在等待的基础上加2000
+            return future.get(time + 2000, TimeUnit.MILLISECONDS); //任务处理超时时间在等待的基础上加2000
          /*   Message message = new Message();
             message.obj = obj;
             forAtTaskHandler.sendMessage(message);*/
-            return obj;
+
         } catch (TimeoutException ex) {
             LogUtils.d(TAG, "获取AT指令处理超时，处理失败！");
         } catch (Exception e) {
@@ -610,7 +611,7 @@ public class PortService extends Service {
                     //判断服务器是否返回205，如果存在则重置计数
                     if (Arrays.equals(packet.getCmd(), new byte[]{0x02, 0x05})) {
                         LogUtils.e(TAG, "接收到服务器205指令，重置pgkTime计数为0");
-                        pgkTime = 0;
+                        pgkTime.set(0);
                     }
                     //服务器下发107包时则启动第二功能键
                     if (Arrays.equals(packet.getCmd(), new byte[]{0x01, 0x07})) {
